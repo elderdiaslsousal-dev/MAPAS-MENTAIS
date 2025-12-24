@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useMindMap } from '../../store/MindMapContext';
 import { Node } from './Node';
 import { Edge } from './Edge';
 import { calculateTreeLayout } from '../Layout/layoutUtils';
-import { ArrowLeft, Plus, Trash2, Edit3, Grid, Crosshair, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Grid, Crosshair, ZoomIn, ZoomOut } from 'lucide-react';
 
 export const Canvas: React.FC = () => {
     const { currentMap, dispatch, closeMap } = useMindMap();
@@ -48,13 +48,19 @@ export const Canvas: React.FC = () => {
         const nodes = Object.values(currentMap.nodes);
         if (nodes.length === 0) return;
 
+        if (nodes.length === 0) return;
+
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         nodes.forEach(n => {
-            minX = Math.min(minX, n.x);
-            maxX = Math.max(maxX, n.x);
-            minY = Math.min(minY, n.y);
-            maxY = Math.max(maxY, n.y);
+            const nx = n.x ?? 0;
+            const ny = n.y ?? 0;
+            minX = Math.min(minX, nx);
+            maxX = Math.max(maxX, nx);
+            minY = Math.min(minY, ny);
+            maxY = Math.max(maxY, ny);
         });
+
+        if (minX === Infinity) return;
 
         const centerX = (minX + maxX) / 2;
         const centerY = (minY + maxY) / 2;
@@ -112,14 +118,15 @@ export const Canvas: React.FC = () => {
         const dy = e.clientY - lastMousePos.current.y;
         lastMousePos.current = { x: e.clientX, y: e.clientY };
 
-        if (isDraggingNode && selectedNodeId) {
+        if (isDraggingNode && selectedNodeId && currentMap && currentMap.nodes[selectedNodeId]) {
             // Calculate delta in world space
+            const node = currentMap.nodes[selectedNodeId];
             dispatch({
                 type: 'MOVE_NODE',
                 payload: {
                     id: selectedNodeId,
-                    x: currentMap!.nodes[selectedNodeId].x + dx / scale,
-                    y: currentMap!.nodes[selectedNodeId].y + dy / scale
+                    x: (node.x ?? 0) + dx / scale,
+                    y: (node.y ?? 0) + dy / scale
                 }
             });
         } else if (isPanning) {
@@ -165,13 +172,14 @@ export const Canvas: React.FC = () => {
             const dy = touch.clientY - lastTouchPos.current.y;
             lastTouchPos.current = { x: touch.clientX, y: touch.clientY };
 
-            if (isDraggingNode && selectedNodeId) {
+            if (isDraggingNode && selectedNodeId && currentMap && currentMap.nodes[selectedNodeId]) {
+                const node = currentMap.nodes[selectedNodeId];
                 dispatch({
                     type: 'MOVE_NODE',
                     payload: {
                         id: selectedNodeId,
-                        x: currentMap!.nodes[selectedNodeId].x + dx / scale,
-                        y: currentMap!.nodes[selectedNodeId].y + dy / scale
+                        x: (node.x ?? 0) + dx / scale,
+                        y: (node.y ?? 0) + dy / scale
                     }
                 });
             } else if (isPanning) {
@@ -198,10 +206,10 @@ export const Canvas: React.FC = () => {
         return (
             <Edge
                 key={`${node.parentId}-${node.id}`}
-                sourceX={parent.x}
-                sourceY={parent.y}
-                targetX={node.x}
-                targetY={node.y}
+                sourceX={parent.x ?? 0}
+                sourceY={parent.y ?? 0}
+                targetX={node.x ?? 0}
+                targetY={node.y ?? 0}
             />
         );
     });
@@ -283,10 +291,10 @@ export const Canvas: React.FC = () => {
                                 return (
                                     <Edge
                                         key={`${node.parentId}-${node.id}`}
-                                        sourceX={parent.x}
-                                        sourceY={parent.y}
-                                        targetX={node.x}
-                                        targetY={node.y}
+                                        sourceX={parent.x ?? 0}
+                                        sourceY={parent.y ?? 0}
+                                        targetX={node.x ?? 0}
+                                        targetY={node.y ?? 0}
                                     />
                                 );
                             })}
@@ -311,7 +319,7 @@ export const Canvas: React.FC = () => {
                     {Object.values(currentMap.nodes).map(node => (
                         <Node
                             key={node.id}
-                            node={node}
+                            node={{ ...node, x: node.x ?? 0, y: node.y ?? 0 }}
                             isSelected={selectedNodeId === node.id}
                             onSelect={setSelectedNodeId}
                             onDragStart={handleNodeDragStart}
