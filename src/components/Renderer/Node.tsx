@@ -8,9 +8,10 @@ interface NodeProps {
     node: MindMapNode;
     isSelected?: boolean;
     onSelect: (id: string) => void;
+    onDragStart?: (e: React.MouseEvent | React.TouchEvent, nodeId: string) => void;
 }
 
-export const Node: React.FC<NodeProps> = ({ node, isSelected, onSelect }) => {
+export const Node: React.FC<NodeProps> = ({ node, isSelected, onSelect, onDragStart }) => {
     const { dispatch } = useMindMap();
     const [isEditing, setIsEditing] = useState(false);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -47,21 +48,27 @@ export const Node: React.FC<NodeProps> = ({ node, isSelected, onSelect }) => {
         dispatch({ type: 'ADD_NODE', payload: { parentId: node.id } });
     };
 
-    // Futuristic Style System
+    const handleMouseDown = (e: React.MouseEvent | React.TouchEvent) => {
+        e.stopPropagation();
+        onSelect(node.id);
+        if (onDragStart) {
+            onDragStart(e, node.id);
+        }
+    };
+
+    // Modern Professional Style System
     const baseClasses = `
-    absolute transform -translate-x-1/2 -translate-y-1/2 
-    min-w-[140px] px-6 py-4 rounded-full
-    transition-all duration-300 ease-out
-    flex items-center justify-center cursor-pointer
+    absolute transform -translate-y-1/2 
+    min-w-[150px] max-w-[300px] px-6 py-3 rounded-2xl
+    transition-all duration-200
+    flex items-center justify-center cursor-move
     group
     backdrop-blur-md
+    text-sm font-medium tracking-wide
   `;
 
-    const defaultStyle = "bg-surface/60 border border-white/10 text-gray-100 shadow-lg hover:border-cyan-500/50";
-    const selectedStyle = "bg-surface/90 border-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.4)] scale-105 z-20 ring-1 ring-cyan-400/50";
-
-    // If not selected, hover scale
-    const hoverEffect = !isSelected ? "hover:scale-105" : "";
+    const defaultStyle = "bg-surface/80 border border-surface-highlight text-text shadow-md hover:border-primary/50 hover:shadow-lg hover:shadow-primary/5";
+    const selectedStyle = "bg-surface border-primary text-white shadow-xl shadow-primary/20 ring-2 ring-primary/20 z-20";
 
     return (
         <div
@@ -70,27 +77,16 @@ export const Node: React.FC<NodeProps> = ({ node, isSelected, onSelect }) => {
             className={clsx(
                 baseClasses,
                 isSelected ? selectedStyle : defaultStyle,
-                hoverEffect,
                 node.style?.fontSize || 'text-sm'
             )}
             style={{
                 left: node.x,
                 top: node.y,
-                // Optional override if node has custom colors
-                // backgroundColor: node.style?.backgroundColor,
-                // borderColor: node.style?.borderColor
             }}
-            onClick={(e) => {
-                e.stopPropagation();
-                onSelect(node.id);
-            }}
+            onMouseDown={handleMouseDown}
+            onTouchStart={handleMouseDown}
             onDoubleClick={handleDoubleClick}
         >
-            {/* Glow Effect Element (Behind) */}
-            <div className={clsx("absolute inset-0 rounded-full transition-opacity duration-500 opacity-0 group-hover:opacity-100", isSelected && "opacity-100")}
-                style={{ boxShadow: 'inset 0 0 10px rgba(6,182,212,0.1)' }}
-            ></div>
-
             {isEditing ? (
                 <input
                     ref={inputRef}
@@ -98,10 +94,10 @@ export const Node: React.FC<NodeProps> = ({ node, isSelected, onSelect }) => {
                     onChange={handleChange}
                     onBlur={handleBlur}
                     onKeyDown={handleKeyDown}
-                    className="bg-transparent text-center focus:outline-none w-full text-white font-medium tracking-wide selection:bg-cyan-500/30"
+                    className="bg-transparent text-center focus:outline-none w-full text-white font-medium selection:bg-primary/30 min-w-[100px]"
                 />
             ) : (
-                <span className="text-center select-none whitespace-pre-wrap max-w-xs block overflow-hidden text-ellipsis font-medium tracking-wide drop-shadow-md">
+                <span className="text-center select-none whitespace-pre-wrap block overflow-hidden text-ellipsis line-clamp-3">
                     {node.text}
                 </span>
             )}
@@ -110,13 +106,13 @@ export const Node: React.FC<NodeProps> = ({ node, isSelected, onSelect }) => {
             <div
                 onClick={handleAddChild}
                 className={clsx(
-                    "absolute -right-3 -top-3 w-8 h-8 rounded-full bg-surface border border-cyan-500/50 text-cyan-400 flex items-center justify-center shadow-lg transition-all hover:bg-cyan-500 hover:text-white hover:shadow-[0_0_10px_rgba(6,182,212,0.6)] z-30",
+                    "absolute -right-3 -top-3 w-7 h-7 rounded-full bg-surface border border-surface-highlight text-text-muted flex items-center justify-center shadow-md transition-all hover:bg-primary hover:text-white hover:border-primary hover:scale-110 z-30",
                     isSelected ? "opacity-100 scale-100" : "opacity-0 scale-75 pointer-events-none group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto",
                     "duration-200 cursor-pointer"
                 )}
-                title="Add Child"
+                title="Adicionar filho"
             >
-                <Plus size={16} />
+                <Plus size={14} />
             </div>
         </div>
     );

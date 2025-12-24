@@ -3,269 +3,360 @@ import { useMindMap } from '../../store/MindMapContext';
 import { Node } from './Node';
 import { Edge } from './Edge';
 import { calculateTreeLayout } from '../Layout/layoutUtils';
-import { ArrowLeft, Plus, Trash2, Edit3 } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Edit3, Grid, Crosshair, ZoomIn, ZoomOut } from 'lucide-react';
 
 export const Canvas: React.FC = () => {
     const { currentMap, dispatch, closeMap } = useMindMap();
     const [selectedNodeId, setSelectedNodeId] = useState<string | null>(currentMap?.rootId || null);
+
+    // Canvas State
     const [pan, setPan] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+    const [scale, setScale] = useState(1);
     const [isPanning, setIsPanning] = useState(false);
-    const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 });
+    const [isDraggingNode, setIsDraggingNode] = useState(false);
 
-    // Touch handling state
-    const [lastTouchPos, setLastTouchPos] = useState({ x: 0, y: 0 });
-
+    // Interaction Refs
+    const lastMousePos = useRef({ x: 0, y: 0 });
+    const lastTouchPos = useRef({ x: 0, y: 0 }); // Single touch pan
+    const lastPinchDist = useRef<number | null>(null); // Pinch zoom
     const containerRef = useRef<HTMLDivElement>(null);
 
-    const layout = useMemo(() => {
-        if (!currentMap) return {};
-        return calculateTreeLayout(currentMap);
-    }, [currentMap?.nodes, currentMap?.rootId]);
+    // Initial Auto-Layout (Once per load if fresh map?) 
+    // Actually, if map has existing positions, we use them.
+    // If we want "Auto Layout" it should be an action triggered by user.
+    // For now, reliance on `currentMap.nodes` having x,y is key. 
+    // The Reducer initializes new nodes at 0,0. 
+    // We should probably init layout if all nodes are at 0,0?
+    // Let's assume user wants to start fresh.
 
-    // --- Keyboard Shortcuts (Desktop) ---
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            const isInputActive = document.activeElement instanceof HTMLInputElement;
-            if (isInputActive) {
-                if (e.key === 'Tab') e.preventDefault();
-                else return;
-            }
+    // --- Actions ---
 
-            if (!selectedNodeId) return;
+    const handleAutoAlign = () => {
+        if (!currentMap) return;
+        const layout = calculateTreeLayout(currentMap);
+        // Dispatch "Apply Layout" (Not mapped in reducer, so we do batched moves or just one by one?)
+        // Better: Add APPLY_LAYOUT to reducer. For now, let's iterate.
+        // Optimization: Create a pseudo-action or just iterate.
+        Object.keys(layout).forEach(id => {
+            dispatch({ type: 'MOVE_NODE', payload: { id, x: layout[id].x, y: layout[id].y } });
+        });
+    };
 
-            switch (e.key) {
-                case 'Tab':
-                    e.preventDefault();
-                    if (currentMap) {
-                        dispatch({ type: 'ADD_NODE', payload: { parentId: selectedNodeId } });
-                    }
-                    break;
+    const handleCenterMap = () => {
+        // Calculate center of all nodes
+        if (!currentMap) return;
+        const nodes = Object.values(currentMap.nodes);
+        if (nodes.length === 0) return;
 
-                case 'Backspace':
-                case 'Delete':
-                    if (currentMap && selectedNodeId !== currentMap.rootId) {
-                        const parentId = currentMap.nodes[selectedNodeId]?.parentId;
-                        dispatch({ type: 'DELETE_NODE', payload: { id: selectedNodeId } });
-                        if (parentId) setSelectedNodeId(parentId);
-                    }
-                    break;
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [currentMap, selectedNodeId, dispatch]);
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        nodes.forEach(n => {
+            minX = Math.min(minX, n.x);
+            maxX = Math.max(maxX, n.x);
+            minY = Math.min(minY, n.y);
+            maxY = Math.max(maxY, n.y);
+        });
 
-    if (!currentMap) return null;
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
 
-    // --- Mouse Handling (Desktop) ---
+        setPan({
+            x: window.innerWidth / 2 - centerX * scale,
+            y: window.innerHeight / 2 - centerY * scale
+        });
+    };
+
+    const handleZoom = (delta: number) => {
+        setScale(s => Math.min(Math.max(0.1, s + delta), 3));
+    };
+
+    // --- Inputs Handling ---
+
+    const handleWheel = (e: React.WheelEvent) => {
+        if (e.ctrlKey) {
+            e.preventDefault(); // Prevent browser zoom
+            const zoomSensitivity = 0.001;
+            const delta = -e.deltaY * zoomSensitivity;
+            setScale(s => Math.min(Math.max(0.1, s + delta), 3));
+        } else {
+            // Pan
+            setPan(p => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
+        }
+    };
+
     const handleMouseDown = (e: React.MouseEvent) => {
-        if (e.target === containerRef.current) {
+        if (e.button === 0) { // Left click
             setIsPanning(true);
-            setLastMousePos({ x: e.clientX, y: e.clientY });
+            lastMousePos.current = { x: e.clientX, y: e.clientY };
             setSelectedNodeId(null);
         }
     };
 
+    const handleNodeDragStart = (e: React.MouseEvent | React.TouchEvent, nodeId: string) => {
+        setIsDraggingNode(true);
+        setSelectedNodeId(nodeId);
+
+        let clientX, clientY;
+        if ('touches' in e) {
+            clientX = e.touches[0].clientX;
+            clientY = e.touches[0].clientY;
+        } else {
+            clientX = (e as React.MouseEvent).clientX;
+            clientY = (e as React.MouseEvent).clientY;
+        }
+
+        lastMousePos.current = { x: clientX, y: clientY };
+    };
+
     const handleMouseMove = (e: React.MouseEvent) => {
-        if (isPanning) {
-            const dx = e.clientX - lastMousePos.x;
-            const dy = e.clientY - lastMousePos.y;
+        const dx = e.clientX - lastMousePos.current.x;
+        const dy = e.clientY - lastMousePos.current.y;
+        lastMousePos.current = { x: e.clientX, y: e.clientY };
+
+        if (isDraggingNode && selectedNodeId) {
+            // Calculate delta in world space
+            dispatch({
+                type: 'MOVE_NODE',
+                payload: {
+                    id: selectedNodeId,
+                    x: currentMap!.nodes[selectedNodeId].x + dx / scale,
+                    y: currentMap!.nodes[selectedNodeId].y + dy / scale
+                }
+            });
+        } else if (isPanning) {
             setPan(p => ({ x: p.x + dx, y: p.y + dy }));
-            setLastMousePos({ x: e.clientX, y: e.clientY });
         }
     };
 
     const handleMouseUp = () => {
         setIsPanning(false);
+        setIsDraggingNode(false);
     };
 
-    // --- Touch Handling (Mobile) ---
+    // --- Touch Handling ---
+
+    const getDistance = (touches: React.TouchList) => {
+        const dx = touches[0].clientX - touches[1].clientX;
+        const dy = touches[0].clientY - touches[1].clientY;
+        return Math.sqrt(dx * dx + dy * dy);
+    };
+
     const handleTouchStart = (e: React.TouchEvent) => {
-        if (e.target === containerRef.current) {
-            setIsPanning(true);
-            const touch = e.touches[0];
-            setLastTouchPos({ x: touch.clientX, y: touch.clientY });
-            // Optional: Deselect on background touch? Maybe keep selection for easier operation.
-            // setSelectedNodeId(null); 
+        if (e.touches.length === 2) {
+            // Pinch start
+            lastPinchDist.current = getDistance(e.touches);
+        } else if (e.touches.length === 1) {
+            if (!isDraggingNode) { // Only pan if not dragging node
+                setIsPanning(true);
+                lastTouchPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            }
         }
     };
 
     const handleTouchMove = (e: React.TouchEvent) => {
-        if (isPanning) {
+        if (e.touches.length === 2 && lastPinchDist.current) {
+            // Pinch Zoom
+            const newDist = getDistance(e.touches);
+            const delta = (newDist - lastPinchDist.current) * 0.005;
+            setScale(s => Math.min(Math.max(0.1, s + delta), 3));
+            lastPinchDist.current = newDist;
+        } else if (e.touches.length === 1) {
             const touch = e.touches[0];
-            const dx = touch.clientX - lastTouchPos.x;
-            const dy = touch.clientY - lastTouchPos.y;
-            setPan(p => ({ x: p.x + dx, y: p.y + dy }));
-            setLastTouchPos({ x: touch.clientX, y: touch.clientY });
+            const dx = touch.clientX - lastTouchPos.current.x;
+            const dy = touch.clientY - lastTouchPos.current.y;
+            lastTouchPos.current = { x: touch.clientX, y: touch.clientY };
+
+            if (isDraggingNode && selectedNodeId) {
+                dispatch({
+                    type: 'MOVE_NODE',
+                    payload: {
+                        id: selectedNodeId,
+                        x: currentMap!.nodes[selectedNodeId].x + dx / scale,
+                        y: currentMap!.nodes[selectedNodeId].y + dy / scale
+                    }
+                });
+            } else if (isPanning) {
+                setPan(p => ({ x: p.x + dx, y: p.y + dy }));
+            }
         }
     };
 
     const handleTouchEnd = () => {
         setIsPanning(false);
-    };
-
-    // --- Action Handlers ---
-    const handleAddNode = () => {
-        if (selectedNodeId) {
-            dispatch({ type: 'ADD_NODE', payload: { parentId: selectedNodeId } });
-        }
-    };
-
-    const handleDeleteNode = () => {
-        if (selectedNodeId && selectedNodeId !== currentMap.rootId) {
-            const parentId = currentMap.nodes[selectedNodeId]?.parentId;
-            dispatch({ type: 'DELETE_NODE', payload: { id: selectedNodeId } });
-            if (parentId) setSelectedNodeId(parentId);
-        }
-    };
-
-    const handleEditNode = () => {
-        // Logic to trigger edit mode. 
-        // The Node component listens for double click.
-        // We can force edit by passing a prop or dispatching an action if we refactor Node state.
-        // For MVP, simple double tap on node works, but a button is requested.
-        // We will trick this by dispatching a custom event or refactoring Node to listen to context?
-        // Simpler: The Node component check if it is selected and we trigger a re-render with "edit mode" forced?
-        // Actually, Node manages its own `isEditing`. 
-        // Let's rely on double-tap for now or add an "edit" capability later if strictly needed.
-        // BUT user said "I can't create anything".
-        // Let's simulate a double click event on the selected DOM node? Hacky.
-        // Better: Move `isEditing` to Context or Reducer? excessive for MVP.
-        // Alternative: Just tell user to "Double Tap" to edit. 
-        // OR: Send a "start edit" signal via a ref?
-        // Let's implement a global "EditingId" in state/context to support this button.
-        // For now, let's keep it simple: Add and Delete are the critical missing ones.
-        // Edit is usually Double Tap which works on touch too.
-        // Let's try to dispatch a fake double click?
-        const el = document.getElementById(`node-${selectedNodeId}`);
-        if (el) {
-            const event = new MouseEvent('dblclick', {
-                bubbles: true,
-                cancelable: true,
-                view: window
-            });
-            el.dispatchEvent(event);
-        }
+        setIsDraggingNode(false);
+        lastPinchDist.current = null;
     };
 
 
+    if (!currentMap) return null;
+
+    // Computed Edges
     const edges = Object.values(currentMap.nodes).map(node => {
         if (!node.parentId) return null;
-        const start = layout[node.parentId];
-        const end = layout[node.id];
-        if (!start || !end) return null;
+        const parent = currentMap.nodes[node.parentId];
+        if (!parent) return null;
 
         return (
             <Edge
                 key={`${node.parentId}-${node.id}`}
-                sourceX={start.x}
-                sourceY={start.y}
-                targetX={end.x}
-                targetY={end.y}
+                sourceX={parent.x}
+                sourceY={parent.y}
+                targetX={node.x}
+                targetY={node.y}
             />
         );
     });
 
-    const glassButton = "bg-white/5 hover:bg-white/10 border border-white/10 transition-all duration-300 backdrop-blur-sm active:scale-95";
-    const glassPanel = "bg-surface/70 backdrop-blur-xl border border-white/10 shadow-xl";
+    const glassButton = "bg-surface/80 hover:bg-surface border border-surface-highlight text-text-muted hover:text-white p-3 rounded-xl transition-all shadow-lg active:scale-95 backdrop-blur-sm";
 
     return (
-        <div className="w-full h-full relative overflow-hidden bg-background"
+        <div className="w-full h-full relative overflow-hidden bg-background select-none font-sans"
+            ref={containerRef}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
-
+            onWheel={handleWheel} // Integrated Zoom/Pan on Wheel
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
         >
-            {/* Animated Grid Background */}
+            {/* Background Pattern */}
             <div
-                className="absolute inset-0 bg-grid-pattern opacity-20 pointer-events-none"
+                className="absolute inset-0 bg-grid-pattern opacity-[0.05] pointer-events-none"
                 style={{
-                    backgroundPosition: `${pan.x}px ${pan.y}px`
+                    backgroundPosition: `${pan.x}px ${pan.y}px`,
+                    backgroundSize: `${20 * scale}px ${20 * scale}px`
                 }}
             ></div>
 
-            {/* Toolbar / Header */}
-            <div className="absolute top-6 left-6 z-50 flex gap-4 animate-fade-in pointer-events-none">
+            {/* Top Bar */}
+            <div className="absolute top-4 left-4 z-50 flex gap-4 pointer-events-none">
                 <div className="pointer-events-auto">
-                    <button onClick={closeMap} className={`p-3 rounded-xl text-cyan-300 hover:text-white shadow-[0_0_15px_rgba(0,0,0,0.5)] ${glassButton}`}>
+                    <button onClick={closeMap} className={glassButton}>
                         <ArrowLeft size={24} />
                     </button>
                 </div>
-                <div className={`px-6 py-3 rounded-xl flex items-center gap-3 ${glassPanel} pointer-events-auto`}>
-                    <div className="w-2 h-2 bg-primary rounded-full animate-pulse"></div>
-                    <span className="font-bold text-gray-100 tracking-wide uppercase text-sm truncate max-w-[150px]">{currentMap.title}</span>
+                <div className="px-6 py-3 rounded-xl bg-surface/90 backdrop-blur-md border border-surface-highlight flex items-center gap-3 shadow-lg pointer-events-auto">
+                    <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse"></div>
+                    <span className="font-bold text-gray-100 tracking-wide text-sm truncate max-w-[200px]">{currentMap.title}</span>
                 </div>
             </div>
 
-            {/* Infinite Canvas Container */}
+            {/* Control Toolbar (Right Side) */}
+            <div className="absolute top-1/2 -translate-y-1/2 right-4 z-50 flex flex-col gap-3 pointer-events-none">
+                <div className="pointer-events-auto flex flex-col gap-2 p-2 rounded-2xl bg-surface/50 backdrop-blur-sm border border-white/5">
+                    <button onClick={handleAutoAlign} className={glassButton} title="Organizar Automaticamente">
+                        <Grid size={20} />
+                    </button>
+                    <button onClick={handleCenterMap} className={glassButton} title="Centralizar Mapa">
+                        <Crosshair size={20} />
+                    </button>
+                    <div className="w-full h-px bg-white/10 my-1"></div>
+                    <button onClick={() => handleZoom(0.2)} className={glassButton} title="Aumentar Zoom">
+                        <ZoomIn size={20} />
+                    </button>
+                    <button onClick={() => handleZoom(-0.2)} className={glassButton} title="Diminuir Zoom">
+                        <ZoomOut size={20} />
+                    </button>
+                </div>
+            </div>
+
+            {/* Canvas Content */}
             <div
-                ref={containerRef}
-                className="absolute w-full h-full origin-top-left cursor-grab active:cursor-grabbing touch-none" // touch-none vital for handling gestures manually
+                className="absolute origin-top-left will-change-transform"
+                style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})` }}
             >
-                <div
-                    className="absolute transition-transform duration-75 ease-out origin-center"
-                    style={{ transform: `translate(${pan.x}px, ${pan.y}px)` }}
-                >
-                    <svg className="absolute top-0 left-0 overflow-visible" style={{ pointerEvents: 'none' }}>
+                <div className="relative"> {/* Zero-size wrapper to allow negative logic if needed, but absolute children work fine */}
+                    <svg className="absolute top-[-50000px] left-[-50000px] w-[100000px] h-[100000px] overflow-visible pointer-events-none">
+                        {/* Large SVG canvas for edges */}
                         <defs>
                             <linearGradient id="edge-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                                <stop offset="0%" stopColor="#06b6d4" /> {/* Cyan */}
-                                <stop offset="100%" stopColor="#d946ef" /> {/* Fuchsia */}
+                                <stop offset="0%" stopColor="#6366f1" /> {/* Indigo */}
+                                <stop offset="100%" stopColor="#ec4899" /> {/* Pink */}
                             </linearGradient>
                         </defs>
+                        <g transform={`translate(50000, 50000)`}> {/* Center datum */}
+                            {Object.values(currentMap.nodes).map(node => {
+                                if (!node.parentId) return null;
+                                const parent = currentMap.nodes[node.parentId];
+                                if (!parent) return null;
+                                return (
+                                    <Edge
+                                        key={`${node.parentId}-${node.id}`}
+                                        sourceX={parent.x}
+                                        sourceY={parent.y}
+                                        targetX={node.x}
+                                        targetY={node.y}
+                                    />
+                                );
+                            })}
+                        </g>
+                    </svg>
+
+                    {/* Nodes Layer - We use the same translate trick or just raw comparison. 
+                        Actually, SVG Transform group above is offset 50000. 
+                        Let's just use raw coords for Nodes and SVG lines without massive SVG wrapper if possible.
+                        Better: SVG spans viewport? No, panning moves it. 
+                        The container `div` moves. So (0,0) inside the `div` is the world origin.
+                        Nodes at (x,y) are relative to this origin.
+                        SVG Lines also relative to this origin.
+                        So we don't need the 50k offset hack if coordinate space allows negative values in SVG.
+                        SVG overflow-visible is key.
+                     */}
+
+                    <svg className="absolute overflow-visible pointer-events-none" style={{ left: 0, top: 0 }}>
                         {edges}
                     </svg>
 
-                    {Object.values(currentMap.nodes).map(node => {
-                        const pos = layout[node.id];
-                        if (!pos) return null;
-                        const nodeWithPos = { ...node, x: pos.x, y: pos.y }; // Pass computed pos
-                        return (
-                            <Node
-                                key={node.id}
-                                node={nodeWithPos}
-                                isSelected={selectedNodeId === node.id}
-                                onSelect={setSelectedNodeId}
-                            />
-                        );
-                    })}
+                    {Object.values(currentMap.nodes).map(node => (
+                        <Node
+                            key={node.id}
+                            node={node}
+                            isSelected={selectedNodeId === node.id}
+                            onSelect={setSelectedNodeId}
+                            onDragStart={handleNodeDragStart}
+                        />
+                    ))}
                 </div>
             </div>
 
-            {/* Desktop Hint - Hidden on small screens? Or just keep it. */}
-            <div className={`hidden md:block absolute bottom-6 right-6 z-50 px-6 py-3 rounded-full text-xs text-cyan-300/70 font-mono tracking-widest uppercase ${glassPanel}`}>
-                TAB: ADD CHILD | DEL: PURGE | DRAG: NAVIGATE
-            </div>
+            {/* Mobile Action Bar */}
+            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-50 flex gap-4 md:hidden pointer-events-no">
+                <div className="pointer-events-auto flex gap-4 p-2 bg-surface/80 backdrop-blur-xl rounded-full border border-white/10 shadow-2xl">
+                    <button
+                        onClick={() => {
+                            if (selectedNodeId && selectedNodeId !== currentMap.rootId) {
+                                dispatch({ type: 'DELETE_NODE', payload: { id: selectedNodeId } });
+                                const parentId = currentMap.nodes[selectedNodeId]?.parentId;
+                                if (parentId) setSelectedNodeId(parentId);
+                            }
+                        }}
+                        disabled={!selectedNodeId || selectedNodeId === currentMap.rootId}
+                        className="p-3 rounded-full text-red-400 bg-white/5 disabled:opacity-30"
+                    >
+                        <Trash2 size={24} />
+                    </button>
 
-            {/* MOBILE ACTION BAR */}
-            <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-50 flex gap-4 md:hidden">
-                <button
-                    onClick={handleDeleteNode}
-                    disabled={!selectedNodeId || selectedNodeId === currentMap.rootId}
-                    className={`p-4 rounded-full text-red-400 bg-surface/90 border border-red-500/30 shadow-lg backdrop-blur disabled:opacity-30 disabled:grayscale transition-all active:scale-90`}
-                >
-                    <Trash2 size={24} />
-                </button>
+                    <button
+                        onClick={() => {
+                            if (selectedNodeId) {
+                                dispatch({ type: 'ADD_NODE', payload: { parentId: selectedNodeId } });
+                            }
+                        }}
+                        disabled={!selectedNodeId}
+                        className="p-3 rounded-full text-white bg-primary shadow-lg shadow-primary/40 disabled:opacity-30"
+                    >
+                        <Plus size={28} />
+                    </button>
 
-                <button
-                    onClick={handleEditNode}
-                    disabled={!selectedNodeId}
-                    className={`p-4 rounded-full text-cyan-300 bg-surface/90 border border-cyan-500/30 shadow-lg backdrop-blur disabled:opacity-30 disabled:grayscale transition-all active:scale-90`}
-                >
-                    <Edit3 size={24} />
-                </button>
-
-                <button
-                    onClick={handleAddNode}
-                    disabled={!selectedNodeId}
-                    className={`p-4 rounded-full text-white bg-primary shadow-[0_0_20px_rgba(6,182,212,0.6)] disabled:opacity-30 disabled:grayscale transition-all active:scale-90`}
-                >
-                    <Plus size={28} />
-                </button>
+                    {/* Organize Button Mobile */}
+                    <button
+                        onClick={handleAutoAlign}
+                        className="p-3 rounded-full text-cyan-300 bg-white/5"
+                    >
+                        <Grid size={24} />
+                    </button>
+                </div>
             </div>
         </div>
     );
